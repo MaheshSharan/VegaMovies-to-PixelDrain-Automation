@@ -1,0 +1,21 @@
+[Unit]
+Description=VegaMovies to PixelDrain Automation Service
+After=network.target
+
+[Service]
+Type=simple
+User=node
+WorkingDirectory=/opt/vegamovies
+ExecStart=/usr/bin/node server.js
+Restart=always
+RestartSec=10
+Environment=NODE_ENV=production
+Environment=PORT=3000
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=vegamovies
+
+[Install]
+WantedBy=multi-user.target

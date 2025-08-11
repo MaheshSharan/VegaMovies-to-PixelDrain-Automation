@@ -1,0 +1,6 @@
+# VegaMovies to PixelDrain Automation
+# Runs twice daily at 6 AM and 6 PM
+0 6,18 * * * cd /opt/vegamovies && /usr/bin/node cron-job.js >> /var/log/vegamovies-cron.log 2>&1
+
+# Alternative using curl (if you prefer direct API calls)
+# 0 6,18 * * * curl -s http://localhost:3000/movies && sleep 30 && curl -s http://localhost:3000/fetch-links
