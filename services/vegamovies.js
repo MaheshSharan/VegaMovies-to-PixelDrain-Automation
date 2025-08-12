@@ -1,31 +1,43 @@
 import { chromium } from "playwright";
 import * as cheerio from "cheerio";
 import path from "path";
+import os from "os";
 
-// Use chrome-profile directory consistently
-const USER_DATA_DIR = path.join(process.cwd(), 'chrome-profile');
+// Use your actual Chrome Default profile
+const USER_DATA_DIR = path.join(os.homedir(), '.config', 'google-chrome');
 
 export async function setupBrowser() {
     const headlessMode = process.env.HEADLESS_MODE === 'true';
-    console.log(`  - Setting up browser with persistent profile (headless: ${headlessMode})...`);
+    console.log(`  - Setting up browser with your real Chrome profile (headless: ${headlessMode})...`);
     
-    const context = await chromium.launchPersistentContext(USER_DATA_DIR, {
+    // Use your Default Chrome profile specifically
+    const profilePath = path.join(USER_DATA_DIR, 'Default');
+    console.log(`  - Using Chrome profile: ${profilePath}`);
+    
+    const context = await chromium.launchPersistentContext(profilePath, {
         headless: headlessMode,
+        executablePath: '/opt/google/chrome/chrome', // Use your actual Chrome installation
         args: [
             '--disable-blink-features=AutomationControlled',
             '--no-sandbox',
             '--disable-setuid-sandbox',
             '--disable-dev-shm-usage',
-            '--disable-gpu',
             '--no-first-run',
             '--disable-default-apps',
             '--disable-features=TranslateUI',
             '--disable-web-security',
             '--disable-features=VizDisplayCompositor',
-            '--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+            '--disable-infobars',
+            '--disable-extensions-file-access-check',
+            '--disable-extensions-http-throttling',
+            '--disable-extensions-except', // This will load your real extensions
+            '--load-extension', // This will load your real extensions
+            '--user-data-dir=' + USER_DATA_DIR, // Explicitly set user data dir
+            '--profile-directory=Default' // Explicitly set profile
         ],
         viewport: { width: 1920, height: 1080 },
-        userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+        // Don't override user agent - use your real Chrome's user agent
+        ignoreDefaultArgs: ['--enable-automation', '--enable-blink-features=IdleDetection']
     });
     const page = context.pages().length > 0 ? context.pages()[0] : await context.newPage();
     
