@@ -72,24 +72,11 @@ export async function setupBrowser() {
     
     const context = await chromium.launchPersistentContext(profilePath, {
         headless: headlessMode,
-        executablePath: chromeExecutable,
         args: [
-            '--disable-blink-features=AutomationControlled',
             '--no-sandbox',
             '--disable-setuid-sandbox',
-            '--disable-dev-shm-usage',
-            '--no-first-run',
-            '--disable-default-apps',
-            '--disable-features=TranslateUI',
-            '--disable-web-security',
-            '--disable-features=VizDisplayCompositor',
-            '--disable-infobars',
-            '--disable-extensions-file-access-check',
-            '--disable-extensions-http-throttling'
-            // Removed --user-data-dir and --profile-directory as they conflict with launchPersistentContext
-        ],
-        viewport: { width: 1920, height: 1080 },
-        ignoreDefaultArgs: ['--enable-automation', '--enable-blink-features=IdleDetection']
+            '--disable-blink-features=AutomationControlled'
+        ]
     });
     
     console.log(`  - ✅ Chrome launched successfully with your profile!`);
@@ -122,38 +109,12 @@ export async function setupBrowser() {
         console.log(`  - ⚠️ Profile validation warning: ${error.message}`);
     }
     
-    // Advanced stealth techniques
+    // Simple stealth - your real profile already looks legitimate
     await page.addInitScript(() => {
-        // Remove webdriver property
         Object.defineProperty(navigator, 'webdriver', {
             get: () => undefined,
         });
-        
-        // Mock plugins
-        Object.defineProperty(navigator, 'plugins', {
-            get: () => [1, 2, 3, 4, 5],
-        });
-        
-        // Mock languages
-        Object.defineProperty(navigator, 'languages', {
-            get: () => ['en-US', 'en'],
-        });
-        
-        // Mock permissions
-        const originalQuery = window.navigator.permissions.query;
-        window.navigator.permissions.query = (parameters) => (
-            parameters.name === 'notifications' ?
-                Promise.resolve({ state: Notification.permission }) :
-                originalQuery(parameters)
-        );
-        
-        // Mock chrome runtime
-        window.chrome = {
-            runtime: {},
-        };
     });
-    
-    await page.setViewportSize({ width: 1920, height: 1080 });
     console.log('  - Browser setup complete.');
     return { browser: context, context, page };
 }
