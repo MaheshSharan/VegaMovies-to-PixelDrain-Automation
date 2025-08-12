@@ -1,15 +1,9 @@
-import { chromium } from "playwright-extra";
-import stealthPlugin from "puppeteer-extra-plugin-stealth";
+import { chromium } from "playwright";
 import * as cheerio from "cheerio";
 import path from "path";
-import { fileURLToPath } from 'url';
 
-const stealth = stealthPlugin();
-chromium.use(stealth);
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-const USER_DATA_DIR = path.join(__dirname, 'browser_profile');
+// Use chrome-profile directory consistently
+const USER_DATA_DIR = path.join(process.cwd(), 'chrome-profile');
 
 export async function setupBrowser() {
     const headlessMode = process.env.HEADLESS_MODE === 'true';
@@ -25,14 +19,48 @@ export async function setupBrowser() {
             '--disable-gpu',
             '--no-first-run',
             '--disable-default-apps',
-            '--disable-features=TranslateUI'
+            '--disable-features=TranslateUI',
+            '--disable-web-security',
+            '--disable-features=VizDisplayCompositor',
+            '--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
         ],
+        viewport: { width: 1920, height: 1080 },
+        userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
     });
     const page = context.pages().length > 0 ? context.pages()[0] : await context.newPage();
+    
+    // Advanced stealth techniques
     await page.addInitScript(() => {
-        Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+        // Remove webdriver property
+        Object.defineProperty(navigator, 'webdriver', {
+            get: () => undefined,
+        });
+        
+        // Mock plugins
+        Object.defineProperty(navigator, 'plugins', {
+            get: () => [1, 2, 3, 4, 5],
+        });
+        
+        // Mock languages
+        Object.defineProperty(navigator, 'languages', {
+            get: () => ['en-US', 'en'],
+        });
+        
+        // Mock permissions
+        const originalQuery = window.navigator.permissions.query;
+        window.navigator.permissions.query = (parameters) => (
+            parameters.name === 'notifications' ?
+                Promise.resolve({ state: Notification.permission }) :
+                originalQuery(parameters)
+        );
+        
+        // Mock chrome runtime
+        window.chrome = {
+            runtime: {},
+        };
     });
-    await page.setViewportSize({ width: 1280, height: 800 });
+    
+    await page.setViewportSize({ width: 1920, height: 1080 });
     console.log('  - Browser setup complete.');
     return { browser: context, context, page };
 }
