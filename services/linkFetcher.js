@@ -1,5 +1,6 @@
 import { setupBrowser, closeBrowser } from './vegamovies.js';
 import { uploadFileToPixelDrain } from './pixeldrain.js';
+import { optimizeSystemForUploads, getSystemStats } from './systemOptimizer.js';
 import fs from 'fs';
 import path from 'path';
 
@@ -334,6 +335,10 @@ async function processSingleMovie(context, movie) {
 export async function getDownloadLinks(missingMovies) {
     console.log(`[LINK FETCHER] Starting process...`);
     console.log(`[LINK FETCHER] Found ${missingMovies.length} missing movies. Starting to fetch links...`);
+    
+    // Optimize system for large file uploads
+    optimizeSystemForUploads();
+    
     let browser;
     const results = [];
 

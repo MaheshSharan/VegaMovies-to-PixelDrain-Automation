@@ -98,78 +98,129 @@ export function splitMoviesByUploadStatus(scrapedList, uploadedFiles) {
     return { uploaded, missing };
 }
 
-// Upload a file to PixelDrain
-export async function uploadFileToPixelDrain(filePath, fileName) {
-    try {
-        console.log(`  - 📤 Uploading to PixelDrain: ${fileName}`);
-        
-        // Read file and get stats
-        const fileBuffer = fs.readFileSync(filePath);
-        const fileStats = fs.statSync(filePath);
-        
-        console.log(`  - 📊 File size: ${(fileStats.size / 1024 / 1024).toFixed(2)} MB`);
-        
-        // Create axios instance with proper configuration
-        const axiosInstance = axios.create({
-            timeout: 300000, // 5 minutes for large files
-            httpsAgent: new https.Agent({ family: 4 }),
-            maxContentLength: Infinity,
-            maxBodyLength: Infinity,
-            headers: {
-                'Authorization': 'Basic ' + Buffer.from(':' + API_KEY).toString('base64'),
-                'Content-Type': 'application/octet-stream',
-                'Content-Length': fileStats.size,
-                'User-Agent': 'VegaXPixelDrain/1.0'
-            }
-        });
-        
-        // Upload with progress tracking
-        const response = await axiosInstance.put(
-            `https://pixeldrain.com/api/file/${encodeURIComponent(fileName)}`,
-            fileBuffer,
-            {
-                onUploadProgress: (progressEvent) => {
-                    const percentCompleted = Math.round((progressEvent.loaded * 100) / progressEvent.total);
-                    if (percentCompleted % 10 === 0) { // Log every 10%
-                        console.log(`  - 📤 Upload progress: ${percentCompleted}%`);
+// Upload a file to PixelDrain with retry logic and better error handling
+export async function uploadFileToPixelDrain(filePath, fileName, maxRetries = 3) {
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+        try {
+            console.log(`  - 📤 Uploading to PixelDrain (Attempt ${attempt}/${maxRetries}): ${fileName}`);
+            
+            // Get file stats
+            const fileStats = fs.statSync(filePath);
+            const fileSizeMB = (fileStats.size / 1024 / 1024).toFixed(2);
+            console.log(`  - 📊 File size: ${fileSizeMB} MB`);
+            
+            // Create optimized HTTPS agent for large files
+            const uploadAgent = new https.Agent({
+                family: 4, // Force IPv4
+                keepAlive: true,
+                keepAliveMsecs: 30000,
+                maxSockets: 1,
+                maxFreeSockets: 1,
+                timeout: 60000,
+                // Increase socket buffer sizes for large files
+                socketActiveTTL: 0,
+                // Prevent ENOBUFS by limiting concurrent connections
+                scheduling: 'fifo'
+            });
+            
+            // Create file stream instead of loading entire file into memory
+            const fileStream = fs.createReadStream(filePath);
+            
+            // Create axios instance with optimized settings for large files
+            const axiosInstance = axios.create({
+                timeout: 600000, // 10 minutes for very large files
+                httpsAgent: uploadAgent,
+                maxContentLength: Infinity,
+                maxBodyLength: Infinity,
+                // Reduce memory usage
+                maxRedirects: 0,
+                headers: {
+                    'Authorization': 'Basic ' + Buffer.from(':' + API_KEY).toString('base64'),
+                    'Content-Type': 'application/octet-stream',
+                    'Content-Length': fileStats.size,
+                    'User-Agent': 'VegaXPixelDrain/1.0',
+                    'Connection': 'keep-alive'
+                }
+            });
+            
+            let lastProgress = 0;
+            
+            // Upload with progress tracking
+            const response = await axiosInstance.put(
+                `https://pixeldrain.com/api/file/${encodeURIComponent(fileName)}`,
+                fileStream,
+                {
+                    onUploadProgress: (progressEvent) => {
+                        const percentCompleted = Math.round((progressEvent.loaded * 100) / progressEvent.total);
+                        // Log every 5% to reduce console spam
+                        if (percentCompleted >= lastProgress + 5) {
+                            console.log(`  - 📤 Upload progress: ${percentCompleted}% (${(progressEvent.loaded / 1024 / 1024).toFixed(1)} MB)`);
+                            lastProgress = percentCompleted;
+                        }
                     }
                 }
-            }
-        );
-        
-        if (response.status === 201 && response.data.id) {
-            console.log(`  - ✅ Upload successful! PixelDrain ID: ${response.data.id}`);
-            console.log(`  - 🔗 PixelDrain URL: https://pixeldrain.com/u/${response.data.id}`);
+            );
             
-            // Clean up local file after successful upload
-            try {
-                fs.unlinkSync(filePath);
-                console.log(`  - 🗑️ Local file cleaned up`);
-            } catch (cleanupError) {
-                console.log(`  - ⚠️ Could not delete local file: ${cleanupError.message}`);
+            // Close the agent after upload
+            uploadAgent.destroy();
+            
+            if (response.status === 201 && response.data.id) {
+                console.log(`  - ✅ Upload successful! PixelDrain ID: ${response.data.id}`);
+                console.log(`  - 🔗 PixelDrain URL: https://pixeldrain.com/u/${response.data.id}`);
+                
+                // Clean up local file after successful upload
+                try {
+                    fs.unlinkSync(filePath);
+                    console.log(`  - 🗑️ Local file cleaned up`);
+                } catch (cleanupError) {
+                    console.log(`  - ⚠️ Could not delete local file: ${cleanupError.message}`);
+                }
+                
+                return { 
+                    success: true, 
+                    id: response.data.id, 
+                    url: `https://pixeldrain.com/u/${response.data.id}` 
+                };
+            } else {
+                throw new Error(`Unexpected response: ${response.status}`);
             }
             
-            return { 
-                success: true, 
-                id: response.data.id, 
-                url: `https://pixeldrain.com/u/${response.data.id}` 
-            };
-        } else {
-            return { 
-                success: false, 
-                error: `Unexpected response: ${response.status}` 
-            };
+        } catch (error) {
+            console.error(`  - ❌ Upload attempt ${attempt} failed: ${error.message}`);
+            
+            if (error.response) {
+                console.error(`  - Response status: ${error.response.status}`);
+                console.error(`  - Response data:`, error.response.data);
+            }
+            
+            // Check if it's a network buffer error
+            if (error.code === 'ENOBUFS' || error.code === 'ECONNRESET' || error.message.includes('ENOBUFS')) {
+                console.log(`  - 🔄 Network buffer error detected, waiting before retry...`);
+                if (attempt < maxRetries) {
+                    // Wait longer between retries for buffer errors
+                    const waitTime = attempt * 10000; // 10s, 20s, 30s
+                    console.log(`  - ⏳ Waiting ${waitTime/1000} seconds before retry...`);
+                    await new Promise(resolve => setTimeout(resolve, waitTime));
+                    continue;
+                }
+            }
+            
+            // If it's the last attempt or a non-retryable error, return failure
+            if (attempt === maxRetries) {
+                return { 
+                    success: false, 
+                    error: `Upload failed after ${maxRetries} attempts: ${error.message}` 
+                };
+            }
+            
+            // Wait before retry for other errors
+            console.log(`  - ⏳ Waiting 5 seconds before retry...`);
+            await new Promise(resolve => setTimeout(resolve, 5000));
         }
-        
-    } catch (error) {
-        console.error(`  - ❌ Upload failed: ${error.message}`);
-        if (error.response) {
-            console.error(`  - Response status: ${error.response.status}`);
-            console.error(`  - Response data:`, error.response.data);
-        }
-        return { 
-            success: false, 
-            error: error.message 
-        };
     }
+    
+    return { 
+        success: false, 
+        error: `Upload failed after ${maxRetries} attempts` 
+    };
 }
