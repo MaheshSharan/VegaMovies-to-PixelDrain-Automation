@@ -33,9 +33,9 @@ VegaXPixelDrain is a production-ready, scalable API service that automatically s
 - **Health monitoring** with automatic service recovery
 - **Performance metrics** tracking processing times and success rates
 
-## System Architecture
+## Data Flow
 
-<iframe width="768" height="432" src="https://miro.com/app/live-embed/uXjVJUhg2iA=/?embedMode=view_only_without_ui&moveToViewport=-1282,-399,1339,400&embedId=908215526541" frameborder="0" scrolling="no" allow="fullscreen; clipboard-read; clipboard-write" allowfullscreen></iframe>
+![Data Flow](docs/diag/data_flow.png)
 
 ### Core Components
 
