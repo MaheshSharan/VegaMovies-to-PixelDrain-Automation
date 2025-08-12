@@ -5,6 +5,7 @@ import fs from 'fs';
 import path from 'path';
 import cliProgress from 'cli-progress';
 import colors from 'colors';
+import axios from 'axios'; // Import axios for robust downloading
 
 // =================================================================================
 // SECTION 1: VEGAMOVIES PAGE INTERACTION (YOUR CODE - PRESERVED)
@@ -75,43 +76,56 @@ async function findBestDownloadLink(page) {
 }
 
 // =================================================================================
-// SECTION 2: DOWNLOAD AND UPLOAD UTILITIES
+// SECTION 2: DOWNLOAD AND UPLOAD UTILITIES (UPGRADED)
 // =================================================================================
 
 /**
- * Downloads a file from browser download and saves it locally
- * @param {any} download Playwright download object
- * @param {string} movieTitle Movie title for folder organization
- * @returns {Promise<{success: boolean, filePath?: string, error?: string}>}
+ * Downloads a file from a URL using axios for robustness and saves it locally.
+ * @param {string} url The URL of the file to download.
+ * @param {string} movieTitle Movie title for folder organization.
+ * @param {import('playwright').Page} page The page object to get cookies from.
+ * @returns {Promise<{success: boolean, filePath?: string, error?: string, fileName?: string}>}
  */
-async function downloadFileLocally(download, movieTitle) {
+async function downloadFileLocally(url, movieTitle, page) {
+    const downloadsDir = path.join(process.cwd(), 'downloads');
+    if (!fs.existsSync(downloadsDir)) {
+        fs.mkdirSync(downloadsDir, { recursive: true });
+    }
+
+    // Generate a safe filename
+    const safeMovieTitle = movieTitle.replace(/[^a-zA-Z0-9\s-]/g, '').substring(0, 50).trim();
+    const suggestedName = path.basename(new URL(url).pathname) || 'video.mp4';
+    const fileName = `${safeMovieTitle}_${suggestedName}`;
+    const filePath = path.join(downloadsDir, fileName);
+
     try {
-        // Create downloads directory if it doesn't exist
-        const downloadsDir = path.join(process.cwd(), 'downloads');
-        if (!fs.existsSync(downloadsDir)) {
-            fs.mkdirSync(downloadsDir, { recursive: true });
-        }
+        console.log(`  - 💾 Preparing to download from URL: ${url.substring(0, 70)}...`);
+        console.log(`  - 💾 Saving to: ${filePath}`);
 
-        // Generate safe filename
-        const suggestedName = download.suggestedFilename() || 'unknown_file';
-        const safeMovieTitle = movieTitle.replace(/[^a-zA-Z0-9\s-]/g, '').substring(0, 50);
-        const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-        const fileName = `${safeMovieTitle}_${timestamp}_${suggestedName}`;
-        const filePath = path.join(downloadsDir, fileName);
+        const cookies = await page.context().cookies();
+        const cookieString = cookies.map(c => `${c.name}=${c.value}`).join('; ');
 
-        console.log(`  - 💾 Downloading to: ${filePath}`);
+        const response = await axios({
+            method: 'get',
+            url: url,
+            responseType: 'stream',
+            headers: {
+                'Cookie': cookieString,
+                'Referer': page.url()
+            }
+        });
 
-        // Save the file
-        await download.saveAs(filePath);
+        const writer = fs.createWriteStream(filePath);
+        response.data.pipe(writer);
 
-        // Verify file exists and has content
-        if (fs.existsSync(filePath)) {
-            const stats = fs.statSync(filePath);
-            console.log(`  - ✅ Download completed: ${(stats.size / 1024 / 1024).toFixed(2)} MB`);
-            return { success: true, filePath };
-        } else {
-            return { success: false, error: 'File was not saved properly' };
-        }
+        await new Promise((resolve, reject) => {
+            writer.on('finish', resolve);
+            writer.on('error', reject);
+        });
+
+        const stats = fs.statSync(filePath);
+        console.log(`  - ✅ Download completed: ${(stats.size / 1024 / 1024).toFixed(2)} MB`);
+        return { success: true, filePath, fileName };
 
     } catch (error) {
         console.error(`  - ❌ Download failed: ${error.message}`);
@@ -119,220 +133,62 @@ async function downloadFileLocally(download, movieTitle) {
     }
 }
 
-
-
 // =================================================================================
-// SECTION 3: INTERMEDIATE PAGE HANDLING (NEW LOGIC INTEGRATED INTO YOUR STRUCTURE)
+// SECTION 3: INTERMEDIATE PAGE HANDLING (CORRECTED LOGIC)
 // =================================================================================
 
-/**
- * Handles the Cloudflare Turnstile CAPTCHA by waiting for it to complete automatically
- * @param {import('playwright').Page} page The page with the Cloudflare challenge.
- */
 async function solveCloudflareTurnstile(page) {
-    console.log('  - Cloudflare Turnstile detected. Waiting for automatic completion...');
+    console.log('  - ☁️ Cloudflare Turnstile detected. Waiting for automatic completion...');
     try {
-        // Wait for the Turnstile to complete automatically (it usually does)
         await page.waitForTimeout(5000);
-
-        // Check if the turnstile completed by looking for the response token
         const turnstileCompleted = await page.locator('input[name="cf-turnstile-response"]').getAttribute('value');
-
         if (turnstileCompleted && turnstileCompleted.length > 10) {
             console.log('  - ✅ Cloudflare Turnstile completed automatically');
             return true;
-        } else {
-            console.log('  - ⏳ Waiting longer for Turnstile completion...');
-            await page.waitForTimeout(10000);
-            return true; // Proceed anyway
         }
+        console.log('  - ⏳ Waiting longer for Turnstile completion...');
+        await page.waitForTimeout(10000);
+        return true;
     } catch (error) {
         console.log(`  - ⚠️ Turnstile handling warning: ${error.message}`);
-        return true; // Continue anyway
+        return true;
     }
 }
 
 /**
- * Clicks the final "Click to Verify" or "Download Now" button and waits for the download.
- * This function now handles the final step for BOTH fast-dl and vgmlinks.
+ * Clicks verify, then finds the final download link to extract.
  * @param {import('playwright').Page} page The intermediate download page.
  * @returns {Promise<{success: boolean, finalUrl?: string}>}
  */
-async function handleFinalDownload(page, movieTitle) {
+async function handleFinalDownload(page) {
     try {
         console.log('  - Looking for download verification button...');
+        const verifyButton = page.locator('button#download-button, button:has-text("Click to verify")').first();
+        await verifyButton.waitFor({ state: 'visible', timeout: 10000 });
+        console.log('  - ✅ Found verify button.');
+        await verifyButton.click({ force: true });
+        console.log('  - 🖱️ Clicked "Click to verify". Waiting for download link to appear...');
 
-        // Wait for page to load completely
-        await page.waitForTimeout(3000);
+        // **THE KEY FIX IS HERE: We wait for the <a> tag and get its href.**
+        const downloadLinkElement = page.locator('a#vd[href*="googleusercontent.com"]');
+        await downloadLinkElement.waitFor({ state: 'visible', timeout: 15000 });
 
-        // Look for the specific "Click to verify" button with multiple selectors
-        const buttonSelectors = [
-            'button#download-button',
-            'button:has-text("Click to verify")',
-            'button.btn-danger:has-text("Click to verify")',
-            'button[type="submit"]:has-text("Click to verify")',
-            '.vd button[type="submit"]'
-        ];
-
-        let verifyButton = null;
-        let buttonFound = false;
-
-        for (const selector of buttonSelectors) {
-            try {
-                verifyButton = page.locator(selector).first();
-                if (await verifyButton.isVisible({ timeout: 2000 })) {
-                    console.log(`  - ✅ Found verify button with selector: ${selector}`);
-                    buttonFound = true;
-                    break;
-                }
-            } catch (e) {
-                console.log(`  - Selector ${selector} not found, trying next...`);
-            }
-        }
-
-        if (!buttonFound) {
-            console.log('  - ❌ No verify button found');
-            return { success: false };
-        }
-
-        // Scroll button into view and wait
-        await verifyButton.scrollIntoViewIfNeeded();
-        await page.waitForTimeout(2000);
-
-        console.log('  - 🖱️ Clicking "Click to verify" button...');
-
-        // Try different click methods
-        try {
-            // Method 1: Regular click
-            await verifyButton.click({ timeout: 10000 });
-            console.log('  - ✅ Regular click successful');
-        } catch (clickError) {
-            console.log('  - ⚠️ Regular click failed, trying force click...');
-            try {
-                // Method 2: Force click
-                await verifyButton.click({ force: true, timeout: 10000 });
-                console.log('  - ✅ Force click successful');
-            } catch (forceError) {
-                console.log('  - ⚠️ Force click failed, trying JavaScript click...');
-                // Method 3: JavaScript click
-                await page.evaluate(() => {
-                    const btn = document.querySelector('#download-button') ||
-                        document.querySelector('button:contains("Click to verify")') ||
-                        document.querySelector('.vd button[type="submit"]');
-                    if (btn) btn.click();
-                });
-                console.log('  - ✅ JavaScript click executed');
-            }
-        }
-
-        // Step 2: Wait for and click the "Download Now" button with multiple retries
-        console.log('  - Waiting for "Download Now" button to appear...');
-
-        // Try multiple times with different selectors and longer waits
-        const downloadButtonSelectors = [
-            'div.btn.btn-danger:has-text("Download Now")',
-            'div[onclick*="openInNewTab"]:has-text("Download Now")',
-            '.btn-danger:has-text("Download Now")',
-            'div:has-text("⚡ Download Now ⚡")',
-            '[onclick*="vegamovies"]:has-text("Download Now")'
-        ];
-
-        let downloadButton = null;
-        let downloadButtonFound = false;
-
-        // Try up to 3 times with 3-second gaps
-        for (let retry = 1; retry <= 3; retry++) {
-            console.log(`  - Looking for download button (attempt ${retry}/3)...`);
-
-            for (const selector of downloadButtonSelectors) {
-                try {
-                    downloadButton = page.locator(selector).first();
-                    if (await downloadButton.isVisible({ timeout: 3000 })) {
-                        console.log(`  - ✅ Found download button with selector: ${selector}`);
-                        downloadButtonFound = true;
-                        break;
-                    }
-                } catch (e) {
-                    console.log(`  - Selector ${selector} not found, trying next...`);
-                }
-            }
-
-            if (downloadButtonFound) {
-                break;
-            }
-
-            if (retry < 3) {
-                console.log(`  - Download button not found, waiting 3 seconds before retry...`);
-                await page.waitForTimeout(3000);
-            }
-        }
-
-        if (downloadButtonFound && downloadButton) {
-            console.log('  - 🖱️ Clicking final "Download Now" button...');
-
-            try {
-                // Get the onclick URL before clicking (in case window closes fast)
-                const onclickUrl = await downloadButton.evaluate(el => {
-                    const onclick = el.getAttribute('onclick');
-                    if (onclick && onclick.includes('openInNewTab')) {
-                        const match = onclick.match(/openInNewTab\('([^']+)'\)/);
-                        return match ? match[1] : null;
-                    }
-                    return null;
-                });
-
-                if (onclickUrl) {
-                    console.log(`  - ✅ Extracted download URL from onclick: ${onclickUrl}`);
-                    return { success: true, finalUrl: onclickUrl };
-                }
-
-                // If we couldn't extract URL, try clicking and listening for download
-                const downloadPromise = page.waitForEvent('download', { timeout: 15000 });
-                await downloadButton.click({ force: true });
-
-                const download = await downloadPromise;
-                const finalUrl = download.url();
-                const suggestedFilename = download.suggestedFilename();
-
-                console.log(`  - 📁 File: ${suggestedFilename}`);
-                console.log(`  - 🔗 Download URL: ${finalUrl}`);
-
-                // Validate the URL
-                if (finalUrl && (finalUrl.includes('pixeldrain.com') || finalUrl.includes('mediafire.com') || finalUrl.includes('fast-dl.lol') || finalUrl.includes('vgmlinks.lol') || finalUrl.includes('vegamovies'))) {
-                    console.log(`  - ✅ Valid download URL detected: ${finalUrl}`);
-                    return { success: true, finalUrl, download, suggestedFilename };
-                } else {
-                    console.log(`  - ⚠️ Unexpected download URL: ${finalUrl}`);
-                    return { success: true, finalUrl, download, suggestedFilename };
-                }
-
-            } catch (downloadError) {
-                console.log(`  - ⚠️ Download event failed: ${downloadError.message}`);
-
-                // Try to get the current page URL as fallback
-                const currentUrl = page.url();
-                if (currentUrl && currentUrl !== 'about:blank') {
-                    console.log(`  - Using current page URL as fallback: ${currentUrl}`);
-                    return { success: true, finalUrl: currentUrl };
-                }
-
-                return { success: false };
-            }
+        const finalUrl = await downloadLinkElement.getAttribute('href');
+        if (finalUrl) {
+            console.log(`  - ✅ Extracted final download link from href: ${finalUrl.substring(0, 70)}...`);
+            return { success: true, finalUrl };
         } else {
-            console.log("  - ⚠️ 'Download Now' button did not appear after 3 attempts.");
-            return { success: false };
+            throw new Error("Found download link element but could not extract href.");
         }
     } catch (error) {
-        console.error(`  - ❌ Error during final download button click: ${error.message}`);
+        console.error(`  - ❌ Error during final download handling: ${error.message}`);
         return { success: false };
     }
 }
 
-
 async function attemptDownloadWithRetries(context, page, buttonElement, buttonType, movie, maxRetries = 3) {
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
         let newPage = null;
-
         try {
             console.log(`\n  - Attempt ${attempt}/${maxRetries}: Clicking ${buttonType} button...`);
             const newPagePromise = context.waitForEvent('page', { timeout: 30000 });
@@ -343,7 +199,6 @@ async function attemptDownloadWithRetries(context, page, buttonElement, buttonTy
             await newPage.waitForLoadState('domcontentloaded', { timeout: 20000 });
             console.log(`  - Intermediate page loaded: ${newPage.url()}`);
 
-            // Check for Cloudflare Turnstile on the new page
             const isCloudflareVisible = await newPage.locator('iframe[src*="challenges.cloudflare.com"]').isVisible({ timeout: 5000 });
             if (isCloudflareVisible) {
                 if (!await solveCloudflareTurnstile(newPage)) {
@@ -352,48 +207,20 @@ async function attemptDownloadWithRetries(context, page, buttonElement, buttonTy
             } else {
                 console.log("  - No Cloudflare challenge detected.");
             }
+            
+            const result = await handleFinalDownload(newPage);
 
-            // Proceed to the final download steps
-            const result = await handleFinalDownload(newPage, movie.title);
-
-            if (result.success && result.download) {
-                console.log('  - 🎯 Download link obtained, starting file download...');
-
-                // Download the file locally
-                const downloadResult = await downloadFileLocally(result.download, movie.title);
-
+            if (result.success && result.finalUrl) {
+                const downloadResult = await downloadFileLocally(result.finalUrl, movie.title, newPage);
                 if (downloadResult.success) {
-                    console.log('  - 📁 File downloaded successfully, starting PixelDrain upload...');
-
-                    // Upload to PixelDrain
-                    const uploadResult = await uploadFileToPixelDrain(
-                        downloadResult.filePath,
-                        result.suggestedFilename || `${movie.title}.mp4`
-                    );
-
-                    await newPage.close();
-
+                    const uploadResult = await uploadFileToPixelDrain(downloadResult.filePath, downloadResult.fileName);
                     if (uploadResult.success) {
-                        return {
-                            success: true,
-                            url: result.finalUrl,
-                            pixeldrainId: uploadResult.id,
-                            pixeldrainUrl: uploadResult.url
-                        };
+                        return { success: true, url: result.finalUrl, pixeldrainId: uploadResult.id, pixeldrainUrl: uploadResult.url };
                     } else {
-                        return {
-                            success: false,
-                            error: `Download successful but upload failed: ${uploadResult.error}`,
-                            downloadUrl: result.finalUrl
-                        };
+                        throw new Error(`Upload failed: ${uploadResult.error}`);
                     }
                 } else {
-                    await newPage.close();
-                    return {
-                        success: false,
-                        error: `Could not download file: ${downloadResult.error}`,
-                        downloadUrl: result.finalUrl
-                    };
+                    throw new Error(`Local download failed: ${downloadResult.error}`);
                 }
             } else {
                 throw new Error("Could not get the final download link from the intermediate page.");
@@ -405,8 +232,7 @@ async function attemptDownloadWithRetries(context, page, buttonElement, buttonTy
             if (attempt < maxRetries) await page.waitForTimeout(3000);
         }
     }
-
-    return { success: false, error: `Failed to get a download link after ${maxRetries} attempts.` };
+    return { success: false, error: `Failed after ${maxRetries} attempts.` };
 }
 
 // =================================================================================
@@ -416,7 +242,6 @@ async function attemptDownloadWithRetries(context, page, buttonElement, buttonTy
 async function processSingleMovie(context, movie) {
     const movieResult = { ...movie, downloadLink: null, status: 'pending' };
     let page;
-
     try {
         console.log(`\n▶ Processing: "${movie.title}"`);
         page = await context.newPage();
@@ -452,10 +277,9 @@ async function processSingleMovie(context, movie) {
         } else {
             movieResult.status = 'failed_after_retries';
             movieResult.error = result.error;
-            movieResult.downloadLink = result.downloadUrl; // Include original download URL if available
+            movieResult.downloadLink = result.downloadUrl;
             console.log(`  - ❌ Process failed: ${result.error}`);
         }
-
     } catch (error) {
         console.error(`  - ❌ Error processing "${movie.title}": ${error.message}`);
         movieResult.status = 'error';
@@ -471,15 +295,10 @@ async function processSingleMovie(context, movie) {
 export async function getDownloadLinks(missingMovies) {
     console.log(`\n🎬 ${colors.cyan.bold('[LINK FETCHER]')} Starting professional movie processing...`);
     console.log(`📊 Found ${colors.yellow.bold(missingMovies.length)} missing movies to process\n`);
-
-    // Optimize system for large file uploads
     optimizeSystemForUploads();
-
     let browser;
     const results = [];
     const startTime = Date.now();
-
-    // Initialize progress bar
     const progressBar = new cliProgress.SingleBar({
         format: `${colors.cyan('Processing')} |${colors.cyan('{bar}')}| ${colors.yellow('{percentage}%')} | ${colors.green('{value}/{total}')} movies | ETA: {eta}s | {status}`,
         barCompleteChar: '█',
@@ -492,62 +311,38 @@ export async function getDownloadLinks(missingMovies) {
     try {
         ({ browser } = await setupBrowser());
         const context = browser;
-
-        // Start progress bar
         progressBar.start(missingMovies.length, 0, { status: 'Initializing...' });
-
         for (let i = 0; i < missingMovies.length; i++) {
             const movie = missingMovies[i];
             const movieNumber = i + 1;
-
-            // Update progress bar
-            progressBar.update(i, {
-                status: `Processing: ${movie.title.substring(0, 30)}${movie.title.length > 30 ? '...' : ''}`
-            });
-
+            progressBar.update(i, { status: `Processing: ${movie.title.substring(0, 30)}${movie.title.length > 30 ? '...' : ''}` });
             console.log(`\n${colors.magenta.bold(`[${movieNumber}/${missingMovies.length}]`)} ${colors.white.bold('Processing:')} ${colors.cyan(movie.title)}`);
-
             const result = await processSingleMovie(context, movie);
             results.push(result);
-
-            // Update progress with result
             const successCount = results.filter(r => r.status === 'success').length;
             const failedCount = results.length - successCount;
-
-            progressBar.update(movieNumber, {
-                status: `✅ ${successCount} success, ❌ ${failedCount} failed`
-            });
-
-            // Cleanup browser tabs before next movie
+            progressBar.update(movieNumber, { status: `✅ ${successCount} success, ❌ ${failedCount} failed` });
             if (movieNumber < missingMovies.length) {
                 await cleanupBrowserTabs(context);
                 console.log(`${colors.gray('⏳ Waiting 3 seconds before next movie...')}`);
                 await new Promise(resolve => setTimeout(resolve, 3000));
             }
         }
-
-        // Complete progress bar
         progressBar.stop();
-
-        // Final statistics
         const endTime = Date.now();
         const totalTime = ((endTime - startTime) / 1000 / 60).toFixed(2);
         const successCount = results.filter(r => r.status === 'success').length;
         const failedCount = results.length - successCount;
-
         console.log(`\n${colors.green.bold('🎉 PROCESSING COMPLETE!')}`);
         console.log(`${colors.cyan('📊 Final Statistics:')}`);
         console.log(`   ${colors.green('✅ Successful:')} ${successCount}/${results.length}`);
         console.log(`   ${colors.red('❌ Failed:')} ${failedCount}/${results.length}`);
         console.log(`   ${colors.blue('⏱️  Total Time:')} ${totalTime} minutes`);
         console.log(`   ${colors.yellow('📈 Success Rate:')} ${((successCount / results.length) * 100).toFixed(1)}%`);
-
-        // Show system stats
         const stats = getSystemStats();
         console.log(`\n${colors.gray('💻 System Stats:')}`);
         console.log(`   Memory: ${stats.freeMemory}/${stats.totalMemory} free`);
         console.log(`   Uptime: ${stats.uptime}\n`);
-
     } catch (error) {
         progressBar.stop();
         console.error(`\n${colors.red.bold('[LINK FETCHER]')} Critical error occurred:`, error);
@@ -560,24 +355,15 @@ export async function getDownloadLinks(missingMovies) {
     return results;
 }
 
-/**
- * Cleanup browser tabs and memory before processing next movie
- */
 async function cleanupBrowserTabs(context) {
     try {
         const pages = context.pages();
-        // Keep only the first page, close all others
         for (let i = 1; i < pages.length; i++) {
             if (!pages[i].isClosed()) {
                 await pages[i].close();
             }
         }
-
-        // Force garbage collection if available
-        if (global.gc) {
-            global.gc();
-        }
-
+        if (global.gc) { global.gc(); }
         console.log(`${colors.gray('🧹 Cleaned up browser tabs and memory')}`);
     } catch (error) {
         console.log(`${colors.yellow('⚠️  Warning: Could not cleanup browser tabs:')}, ${error.message}`);
