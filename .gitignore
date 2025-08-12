@@ -21,6 +21,9 @@ chrome-profile/
 *.log
 logs/
 
+# VPS automation files (generated at runtime)
+run-automation.sh
+
 # Runtime data
 pids
 *.pid

@@ -3,6 +3,8 @@ import { uploadFileToPixelDrain } from './pixeldrain.js';
 import { optimizeSystemForUploads, getSystemStats } from './systemOptimizer.js';
 import fs from 'fs';
 import path from 'path';
+import cliProgress from 'cli-progress';
+import colors from 'colors';
 
 // =================================================================================
 // SECTION 1: VEGAMOVIES PAGE INTERACTION (YOUR CODE - PRESERVED)
@@ -333,38 +335,117 @@ async function processSingleMovie(context, movie) {
 }
 
 export async function getDownloadLinks(missingMovies) {
-    console.log(`[LINK FETCHER] Starting process...`);
-    console.log(`[LINK FETCHER] Found ${missingMovies.length} missing movies. Starting to fetch links...`);
+    console.log(`\n🎬 ${colors.cyan.bold('[LINK FETCHER]')} Starting professional movie processing...`);
+    console.log(`📊 Found ${colors.yellow.bold(missingMovies.length)} missing movies to process\n`);
     
     // Optimize system for large file uploads
     optimizeSystemForUploads();
     
     let browser;
     const results = [];
+    const startTime = Date.now();
+    
+    // Initialize progress bar
+    const progressBar = new cliProgress.SingleBar({
+        format: `${colors.cyan('Processing')} |${colors.cyan('{bar}')}| ${colors.yellow('{percentage}%')} | ${colors.green('{value}/{total}')} movies | ETA: {eta}s | {status}`,
+        barCompleteChar: '█',
+        barIncompleteChar: '░',
+        hideCursor: true,
+        clearOnComplete: false,
+        stopOnComplete: true
+    });
 
     try {
         ({ browser } = await setupBrowser());
         const context = browser;
+        
+        // Start progress bar
+        progressBar.start(missingMovies.length, 0, { status: 'Initializing...' });
 
-        for (const movie of missingMovies) {
+        for (let i = 0; i < missingMovies.length; i++) {
+            const movie = missingMovies[i];
+            const movieNumber = i + 1;
+            
+            // Update progress bar
+            progressBar.update(i, { 
+                status: `Processing: ${movie.title.substring(0, 30)}${movie.title.length > 30 ? '...' : ''}` 
+            });
+            
+            console.log(`\n${colors.magenta.bold(`[${movieNumber}/${missingMovies.length}]`)} ${colors.white.bold('Processing:')} ${colors.cyan(movie.title)}`);
+            
             const result = await processSingleMovie(context, movie);
             results.push(result);
             
-            // Add delay between movies to avoid overwhelming the server
-            if (results.length < missingMovies.length) {
-                console.log('  - Waiting 5 seconds before next movie...');
-                await new Promise(resolve => setTimeout(resolve, 5000));
+            // Update progress with result
+            const successCount = results.filter(r => r.status === 'success').length;
+            const failedCount = results.length - successCount;
+            
+            progressBar.update(movieNumber, { 
+                status: `✅ ${successCount} success, ❌ ${failedCount} failed` 
+            });
+            
+            // Cleanup browser tabs before next movie
+            if (movieNumber < missingMovies.length) {
+                await cleanupBrowserTabs(context);
+                console.log(`${colors.gray('⏳ Waiting 3 seconds before next movie...')}`);
+                await new Promise(resolve => setTimeout(resolve, 3000));
             }
         }
-        console.log(`\n[LINK FETCHER] Completed processing ${results.length} movies`);
+        
+        // Complete progress bar
+        progressBar.stop();
+        
+        // Final statistics
+        const endTime = Date.now();
+        const totalTime = ((endTime - startTime) / 1000 / 60).toFixed(2);
         const successCount = results.filter(r => r.status === 'success').length;
-        console.log(`[LINK FETCHER] Success rate: ${successCount}/${results.length}`);
+        const failedCount = results.length - successCount;
+        
+        console.log(`\n${colors.green.bold('🎉 PROCESSING COMPLETE!')}`);
+        console.log(`${colors.cyan('📊 Final Statistics:')}`);
+        console.log(`   ${colors.green('✅ Successful:')} ${successCount}/${results.length}`);
+        console.log(`   ${colors.red('❌ Failed:')} ${failedCount}/${results.length}`);
+        console.log(`   ${colors.blue('⏱️  Total Time:')} ${totalTime} minutes`);
+        console.log(`   ${colors.yellow('📈 Success Rate:')} ${((successCount/results.length)*100).toFixed(1)}%`);
+        
+        // Show system stats
+        const stats = getSystemStats();
+        console.log(`\n${colors.gray('💻 System Stats:')}`);
+        console.log(`   Memory: ${stats.freeMemory}/${stats.totalMemory} free`);
+        console.log(`   Uptime: ${stats.uptime}\n`);
+        
     } catch (error) {
-        console.error('[LINK FETCHER] Critical error occurred:', error);
+        progressBar.stop();
+        console.error(`\n${colors.red.bold('[LINK FETCHER]')} Critical error occurred:`, error);
     } finally {
         if (browser) {
             await closeBrowser(browser);
+            console.log(`${colors.gray('🔒 Browser closed and resources cleaned up')}`);
         }
     }
     return results;
+}
+
+/**
+ * Cleanup browser tabs and memory before processing next movie
+ */
+async function cleanupBrowserTabs(context) {
+    try {
+        const pages = context.pages();
+        // Keep only the first page, close all others
+        for (let i = 1; i < pages.length; i++) {
+            if (!pages[i].isClosed()) {
+                await pages[i].close();
+            }
+        }
+        
+        // Force garbage collection if available
+        if (global.gc) {
+            global.gc();
+        }
+        
+        console.log(`${colors.gray('🧹 Cleaned up browser tabs and memory')}`);
+    } catch (error) {
+        console.log(`${colors.yellow('⚠️  Warning: Could not cleanup browser tabs:')}, ${error.message}`);
+    }
 }
