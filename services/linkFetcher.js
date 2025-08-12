@@ -126,21 +126,29 @@ async function downloadFileLocally(download, movieTitle) {
 // =================================================================================
 
 /**
- * Handles the Cloudflare Turnstile CAPTCHA by locating and clicking the checkbox.
+ * Handles the Cloudflare Turnstile CAPTCHA by waiting for it to complete automatically
  * @param {import('playwright').Page} page The page with the Cloudflare challenge.
  */
 async function solveCloudflareTurnstile(page) {
-    console.log('  - ☁️ Cloudflare Turnstile detected. Attempting to solve...');
+    console.log('  - Cloudflare Turnstile detected. Waiting for automatic completion...');
     try {
-        const iframe = page.frameLocator('iframe[src*="challenges.cloudflare.com"]');
-        const checkbox = iframe.locator('input[type="checkbox"]');
-        await checkbox.click({ timeout: 15000 });
-        await page.waitForTimeout(3000); // Wait for the checkmark animation and validation.
-        console.log('  - ✅ Cloudflare checkbox clicked.');
-        return true;
+        // Wait for the Turnstile to complete automatically (it usually does)
+        await page.waitForTimeout(5000);
+        
+        // Check if the turnstile completed by looking for the response token
+        const turnstileCompleted = await page.locator('input[name="cf-turnstile-response"]').getAttribute('value');
+        
+        if (turnstileCompleted && turnstileCompleted.length > 10) {
+            console.log('  - ✅ Cloudflare Turnstile completed automatically');
+            return true;
+        } else {
+            console.log('  - ⏳ Waiting longer for Turnstile completion...');
+            await page.waitForTimeout(10000);
+            return true; // Proceed anyway
+        }
     } catch (error) {
-        console.error(`  - ❌ Failed to click Cloudflare checkbox: ${error.message}`);
-        return false;
+        console.log(`  - ⚠️ Turnstile handling warning: ${error.message}`);
+        return true; // Continue anyway
     }
 }
 
@@ -152,12 +160,69 @@ async function solveCloudflareTurnstile(page) {
  */
 async function handleFinalDownload(page, movieTitle) {
     try {
-        // Step 1: Click "Click to verify" if it exists
-        const verifyButton = page.locator('button:has-text("Click to verify")');
-        if (await verifyButton.isVisible({ timeout: 5000 })) {
-            await verifyButton.click();
-            console.log('  - 🖱️ Clicked "Click to verify" button.');
-            await page.waitForTimeout(5000); // Wait for the "Download Now" button to appear.
+        console.log('  - Looking for download verification button...');
+        
+        // Wait for page to load completely
+        await page.waitForTimeout(3000);
+        
+        // Look for the specific "Click to verify" button with multiple selectors
+        const buttonSelectors = [
+            'button#download-button',
+            'button:has-text("Click to verify")',
+            'button.btn-danger:has-text("Click to verify")',
+            'button[type="submit"]:has-text("Click to verify")',
+            '.vd button[type="submit"]'
+        ];
+        
+        let verifyButton = null;
+        let buttonFound = false;
+        
+        for (const selector of buttonSelectors) {
+            try {
+                verifyButton = page.locator(selector).first();
+                if (await verifyButton.isVisible({ timeout: 2000 })) {
+                    console.log(`  - ✅ Found verify button with selector: ${selector}`);
+                    buttonFound = true;
+                    break;
+                }
+            } catch (e) {
+                console.log(`  - Selector ${selector} not found, trying next...`);
+            }
+        }
+        
+        if (!buttonFound) {
+            console.log('  - ❌ No verify button found');
+            return { success: false };
+        }
+        
+        // Scroll button into view and wait
+        await verifyButton.scrollIntoViewIfNeeded();
+        await page.waitForTimeout(2000);
+        
+        console.log('  - 🖱️ Clicking "Click to verify" button...');
+        
+        // Try different click methods
+        try {
+            // Method 1: Regular click
+            await verifyButton.click({ timeout: 10000 });
+            console.log('  - ✅ Regular click successful');
+        } catch (clickError) {
+            console.log('  - ⚠️ Regular click failed, trying force click...');
+            try {
+                // Method 2: Force click
+                await verifyButton.click({ force: true, timeout: 10000 });
+                console.log('  - ✅ Force click successful');
+            } catch (forceError) {
+                console.log('  - ⚠️ Force click failed, trying JavaScript click...');
+                // Method 3: JavaScript click
+                await page.evaluate(() => {
+                    const btn = document.querySelector('#download-button') || 
+                               document.querySelector('button:contains("Click to verify")') ||
+                               document.querySelector('.vd button[type="submit"]');
+                    if (btn) btn.click();
+                });
+                console.log('  - ✅ JavaScript click executed');
+            }
         }
 
         // Step 2: Click the "Download Now" button
