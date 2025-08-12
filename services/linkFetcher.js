@@ -5,7 +5,7 @@ import fs from 'fs';
 import path from 'path';
 import cliProgress from 'cli-progress';
 import colors from 'colors';
-import axios from 'axios'; // Import axios for robust downloading
+import axios from 'axios';
 
 // =================================================================================
 // SECTION 1: VEGAMOVIES PAGE INTERACTION (YOUR CODE - PRESERVED)
@@ -76,31 +76,39 @@ async function findBestDownloadLink(page) {
 }
 
 // =================================================================================
-// SECTION 2: DOWNLOAD AND UPLOAD UTILITIES (UPGRADED)
+// SECTION 2: DOWNLOAD AND UPLOAD UTILITIES (FILENAME LOGIC FIXED)
 // =================================================================================
 
 /**
- * Downloads a file from a URL using axios for robustness and saves it locally.
+ * Downloads a file from a URL using axios and saves it locally with a safe filename.
  * @param {string} url The URL of the file to download.
- * @param {string} movieTitle Movie title for folder organization.
+ * @param {string} movieTitle The original movie title string.
  * @param {import('playwright').Page} page The page object to get cookies from.
  * @returns {Promise<{success: boolean, filePath?: string, error?: string, fileName?: string}>}
  */
 async function downloadFileLocally(url, movieTitle, page) {
-    const downloadsDir = path.join(process.cwd(), 'downloads');
-    if (!fs.existsSync(downloadsDir)) {
-        fs.mkdirSync(downloadsDir, { recursive: true });
-    }
-
-    // Generate a safe filename
-    const safeMovieTitle = movieTitle.replace(/[^a-zA-Z0-9\s-]/g, '').substring(0, 50).trim();
-    const suggestedName = path.basename(new URL(url).pathname) || 'video.mp4';
-    const fileName = `${safeMovieTitle}_${suggestedName}`;
-    const filePath = path.join(downloadsDir, fileName);
-
+    // *** THE KEY FIX IS HERE: Smart and safe filename generation ***
     try {
-        console.log(`  - 💾 Preparing to download from URL: ${url.substring(0, 70)}...`);
-        console.log(`  - 💾 Saving to: ${filePath}`);
+        const downloadsDir = path.join(process.cwd(), 'downloads');
+        fs.mkdirSync(downloadsDir, { recursive: true });
+
+        // 1. Sanitize the movie title for the filename
+        const sanitizedTitle = movieTitle
+            .replace(/\[.*?\]/g, '') // Remove content in brackets like [Hindi]
+            .replace(/[^a-zA-Z0-9\s-]/g, ' ') // Remove non-alphanumeric characters
+            .replace(/\s+/g, ' ') // Collapse multiple spaces
+            .trim()
+            .substring(0, 100); // Truncate to a safe length
+
+        // 2. Intelligently find the file extension from the original title, default to .mp4
+        const extensionMatch = movieTitle.match(/\.(mkv|mp4|avi)$/i);
+        const extension = extensionMatch ? extensionMatch[0] : '.mp4';
+        
+        const fileName = `${sanitizedTitle}${extension}`;
+        const filePath = path.join(downloadsDir, fileName);
+
+        console.log(`  - 💾 Preparing to download from URL...`);
+        console.log(`  - 💾 Saving to clean filename: ${fileName}`);
 
         const cookies = await page.context().cookies();
         const cookieString = cookies.map(c => `${c.name}=${c.value}`).join('; ');
@@ -109,10 +117,7 @@ async function downloadFileLocally(url, movieTitle, page) {
             method: 'get',
             url: url,
             responseType: 'stream',
-            headers: {
-                'Cookie': cookieString,
-                'Referer': page.url()
-            }
+            headers: { 'Cookie': cookieString, 'Referer': page.url() }
         });
 
         const writer = fs.createWriteStream(filePath);
@@ -129,12 +134,16 @@ async function downloadFileLocally(url, movieTitle, page) {
 
     } catch (error) {
         console.error(`  - ❌ Download failed: ${error.message}`);
+        // Check specifically for ENAMETOOLONG just in case, though it shouldn't happen now
+        if (error.code === 'ENAMETOOLONG') {
+            return { success: false, error: 'Generated filename was still too long for the OS.' };
+        }
         return { success: false, error: error.message };
     }
 }
 
 // =================================================================================
-// SECTION 3: INTERMEDIATE PAGE HANDLING (CORRECTED LOGIC)
+// SECTION 3: INTERMEDIATE PAGE HANDLING (YOUR CODE - PRESERVED)
 // =================================================================================
 
 async function solveCloudflareTurnstile(page) {
@@ -155,11 +164,6 @@ async function solveCloudflareTurnstile(page) {
     }
 }
 
-/**
- * Clicks verify, then finds the final download link to extract.
- * @param {import('playwright').Page} page The intermediate download page.
- * @returns {Promise<{success: boolean, finalUrl?: string}>}
- */
 async function handleFinalDownload(page) {
     try {
         console.log('  - Looking for download verification button...');
@@ -169,13 +173,12 @@ async function handleFinalDownload(page) {
         await verifyButton.click({ force: true });
         console.log('  - 🖱️ Clicked "Click to verify". Waiting for download link to appear...');
 
-        // **THE KEY FIX IS HERE: We wait for the <a> tag and get its href.**
         const downloadLinkElement = page.locator('a#vd[href*="googleusercontent.com"]');
         await downloadLinkElement.waitFor({ state: 'visible', timeout: 15000 });
 
         const finalUrl = await downloadLinkElement.getAttribute('href');
         if (finalUrl) {
-            console.log(`  - ✅ Extracted final download link from href: ${finalUrl.substring(0, 70)}...`);
+            console.log(`  - ✅ Extracted final download link from href.`);
             return { success: true, finalUrl };
         } else {
             throw new Error("Found download link element but could not extract href.");
@@ -201,9 +204,7 @@ async function attemptDownloadWithRetries(context, page, buttonElement, buttonTy
 
             const isCloudflareVisible = await newPage.locator('iframe[src*="challenges.cloudflare.com"]').isVisible({ timeout: 5000 });
             if (isCloudflareVisible) {
-                if (!await solveCloudflareTurnstile(newPage)) {
-                    throw new Error("Failed to solve Cloudflare challenge.");
-                }
+                if (!await solveCloudflareTurnstile(newPage)) throw new Error("Failed to solve Cloudflare challenge.");
             } else {
                 console.log("  - No Cloudflare challenge detected.");
             }
@@ -225,7 +226,6 @@ async function attemptDownloadWithRetries(context, page, buttonElement, buttonTy
             } else {
                 throw new Error("Could not get the final download link from the intermediate page.");
             }
-
         } catch (error) {
             console.log(`  - ❌ Attempt ${attempt} failed: ${error.message}`);
             if (newPage && !newPage.isClosed()) await newPage.close();
@@ -242,6 +242,7 @@ async function attemptDownloadWithRetries(context, page, buttonElement, buttonTy
 async function processSingleMovie(context, movie) {
     const movieResult = { ...movie, downloadLink: null, status: 'pending' };
     let page;
+
     try {
         console.log(`\n▶ Processing: "${movie.title}"`);
         page = await context.newPage();
