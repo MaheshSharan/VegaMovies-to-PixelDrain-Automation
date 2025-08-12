@@ -12,11 +12,67 @@ export async function setupBrowser() {
     
     // Use your Default Chrome profile specifically
     const profilePath = path.join(USER_DATA_DIR, 'Default');
-    console.log(`  - Using Chrome profile: ${profilePath}`);
+    console.log(`  - Target Chrome profile path: ${profilePath}`);
+    
+    // Validate Chrome profile exists
+    try {
+        const fs = await import('fs');
+        if (!fs.existsSync(profilePath)) {
+            throw new Error(`Chrome profile not found at: ${profilePath}`);
+        }
+        
+        // Check if profile has essential files
+        const preferencesPath = path.join(profilePath, 'Preferences');
+        const historyPath = path.join(profilePath, 'History');
+        
+        console.log(`  - ✅ Chrome profile directory exists`);
+        console.log(`  - Preferences file: ${fs.existsSync(preferencesPath) ? '✅ Found' : '❌ Missing'}`);
+        console.log(`  - History file: ${fs.existsSync(historyPath) ? '✅ Found' : '❌ Missing'}`);
+        
+        // Get profile size
+        const { execSync } = await import('child_process');
+        try {
+            const profileSize = execSync(`du -sh "${profilePath}" | cut -f1`, { encoding: 'utf8' }).trim();
+            console.log(`  - Profile size: ${profileSize}`);
+        } catch (e) {
+            console.log(`  - Could not determine profile size`);
+        }
+        
+    } catch (error) {
+        console.error(`  - ❌ Chrome profile validation failed: ${error.message}`);
+        throw error;
+    }
+    
+    // Find Chrome executable
+    let chromeExecutable = '/opt/google/chrome/chrome';
+    try {
+        const fs = await import('fs');
+        if (!fs.existsSync(chromeExecutable)) {
+            // Try alternative paths
+            const alternativePaths = [
+                '/usr/bin/google-chrome',
+                '/usr/bin/google-chrome-stable',
+                '/usr/bin/chromium-browser',
+                '/usr/bin/chromium'
+            ];
+            
+            for (const altPath of alternativePaths) {
+                if (fs.existsSync(altPath)) {
+                    chromeExecutable = altPath;
+                    break;
+                }
+            }
+        }
+        console.log(`  - Using Chrome executable: ${chromeExecutable}`);
+    } catch (error) {
+        console.log(`  - Using default Chrome executable path`);
+    }
+    
+    console.log(`  - Launching Chrome with profile...`);
     
     const context = await chromium.launchPersistentContext(profilePath, {
         headless: headlessMode,
-        executablePath: '/opt/google/chrome/chrome', // Use your actual Chrome installation
+        executablePath: chromeExecutable,
         args: [
             '--disable-blink-features=AutomationControlled',
             '--no-sandbox',
@@ -29,17 +85,42 @@ export async function setupBrowser() {
             '--disable-features=VizDisplayCompositor',
             '--disable-infobars',
             '--disable-extensions-file-access-check',
-            '--disable-extensions-http-throttling',
-            '--disable-extensions-except', // This will load your real extensions
-            '--load-extension', // This will load your real extensions
-            '--user-data-dir=' + USER_DATA_DIR, // Explicitly set user data dir
-            '--profile-directory=Default' // Explicitly set profile
+            '--disable-extensions-http-throttling'
+            // Removed --user-data-dir and --profile-directory as they conflict with launchPersistentContext
         ],
         viewport: { width: 1920, height: 1080 },
-        // Don't override user agent - use your real Chrome's user agent
         ignoreDefaultArgs: ['--enable-automation', '--enable-blink-features=IdleDetection']
     });
+    
+    console.log(`  - ✅ Chrome launched successfully with your profile!`);
+    
     const page = context.pages().length > 0 ? context.pages()[0] : await context.newPage();
+    
+    // Validate that we're using the real Chrome profile
+    try {
+        // Check user agent
+        const userAgent = await page.evaluate(() => navigator.userAgent);
+        console.log(`  - User Agent: ${userAgent.substring(0, 50)}...`);
+        
+        // Check if we have real browsing data
+        const cookieCount = (await context.cookies()).length;
+        console.log(`  - Loaded cookies: ${cookieCount}`);
+        
+        // Check local storage (if any)
+        const hasLocalStorage = await page.evaluate(() => {
+            try {
+                return localStorage.length > 0;
+            } catch (e) {
+                return false;
+            }
+        });
+        console.log(`  - Has local storage data: ${hasLocalStorage ? 'Yes' : 'No'}`);
+        
+        console.log(`  - 🎯 Profile validation complete - using real Chrome data!`);
+        
+    } catch (error) {
+        console.log(`  - ⚠️ Profile validation warning: ${error.message}`);
+    }
     
     // Advanced stealth techniques
     await page.addInitScript(() => {
