@@ -25,25 +25,8 @@ const s3Client = new S3Client({
         secretAccessKey: SECRET_KEY
     },
     forcePathStyle: true, // Required for Internet Archive
-    maxAttempts: 3,
-    requestHandler: {
-        httpOptions: {
-            timeout: 300000, // 5 minutes for large files
-            connectTimeout: 60000
-        }
-    }
+    maxAttempts: 3
 });
-
-// Custom request handler to add Internet Archive specific headers
-const originalRequestHandler = s3Client.config.requestHandler;
-s3Client.config.requestHandler = {
-    ...originalRequestHandler,
-    httpOptions: {
-        ...originalRequestHandler?.httpOptions,
-        timeout: 300000,
-        connectTimeout: 60000
-    }
-};
 
 // Detect content type (movie vs TV show)
 function detectContentType(title) {
