@@ -3,6 +3,7 @@ import axios from "axios";
 import https from "https";
 import fs from "fs";
 import stringSimilarity from "string-similarity";
+import cliProgress from "cli-progress";
 
 // Your PixelDrain API key
 const API_KEY = "72aa4d30-a56a-4867-97e0-4959b55c75bb";
@@ -148,7 +149,16 @@ export async function uploadFileToPixelDrain(filePath, fileName, maxRetries = 3)
                 }
             });
             
-            let lastProgress = 0;
+            // Create progress bar for upload
+            const progressBar = new cliProgress.SingleBar({
+                format: '  - 📤 Uploading |{bar}| {percentage}% | {value}/{total} MB | ETA: {eta}s | Speed: {speed} MB/s',
+                barCompleteChar: '█',
+                barIncompleteChar: '░',
+                hideCursor: true,
+                clearOnComplete: true
+            });
+            
+            progressBar.start(fileStats.size / (1024 * 1024), 0);
             
             // Upload with progress tracking
             const response = await axiosInstance.put(
@@ -156,15 +166,13 @@ export async function uploadFileToPixelDrain(filePath, fileName, maxRetries = 3)
                 fileStream,
                 {
                     onUploadProgress: (progressEvent) => {
-                        const percentCompleted = Math.round((progressEvent.loaded * 100) / progressEvent.total);
-                        // Log every 5% to reduce console spam
-                        if (percentCompleted >= lastProgress + 5) {
-                            console.log(`  - 📤 Upload progress: ${percentCompleted}% (${(progressEvent.loaded / 1024 / 1024).toFixed(1)} MB)`);
-                            lastProgress = percentCompleted;
-                        }
+                        const currentMB = progressEvent.loaded / (1024 * 1024);
+                        progressBar.update(currentMB);
                     }
                 }
             );
+            
+            progressBar.stop();
             
             // Close the agent after upload
             uploadAgent.destroy();

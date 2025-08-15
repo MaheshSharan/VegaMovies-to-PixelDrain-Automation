@@ -3,6 +3,7 @@ import { S3Client, PutObjectCommand, ListObjectsV2Command, HeadObjectCommand } f
 import fs from 'fs';
 import path from 'path';
 import stringSimilarity from 'string-similarity';
+import cliProgress from 'cli-progress';
 
 // Environment variables (hardcoded for testing)
 const ACCESS_KEY = 't7KE6ywXUPldLwXs';
@@ -255,16 +256,50 @@ export async function uploadFileToArchive(filePath, fileName, maxRetries = 3) {
             // Build curl command following Internet Archive documentation
             // Use simpler description to avoid Windows command parsing issues
             const simpleDescription = `Movie: ${metadata.title} | Source: VegaXPixelDrain Automation | Uploader: ${USERNAME}`;
-            const curlCommand = `curl --location --header "x-amz-auto-make-bucket:1" --header "x-archive-meta-mediatype:movies" --header "x-archive-meta-title:${metadata.title}" --header "x-archive-meta-description:${simpleDescription}" --header "authorization: LOW ${ACCESS_KEY}:${SECRET_KEY}" --upload-file "${filePath}" "https://s3.us.archive.org/${collection}/${encodeURIComponent(fileName)}"`;
+            const curlCommand = `curl --location --progress-bar --header "x-amz-auto-make-bucket:1" --header "x-archive-meta-mediatype:movies" --header "x-archive-meta-title:${metadata.title}" --header "x-archive-meta-description:${simpleDescription}" --header "authorization: LOW ${ACCESS_KEY}:${SECRET_KEY}" --upload-file "${filePath}" "https://s3.us.archive.org/${collection}/${encodeURIComponent(fileName)}"`;
             
             const startTime = Date.now();
             
-            // Execute curl command
+            // Create progress bar for upload
+            const progressBar = new cliProgress.SingleBar({
+                format: '  - 📤 Uploading |{bar}| {percentage}% | {value}/{total} MB | ETA: {eta}s | Speed: {speed} MB/s',
+                barCompleteChar: '█',
+                barIncompleteChar: '░',
+                hideCursor: true,
+                clearOnComplete: true
+            });
+            
+            progressBar.start(fileStats.size / (1024 * 1024), 0);
+            
+            // Execute curl command with progress tracking
             const { exec } = await import('child_process');
             const { promisify } = await import('util');
             const execAsync = promisify(exec);
             
-            const { stdout, stderr } = await execAsync(curlCommand);
+            // Track upload progress using curl's progress output
+            const uploadProcess = exec(curlCommand, (error, stdout, stderr) => {
+                progressBar.stop();
+            });
+            
+            // Monitor curl progress output
+            uploadProcess.stdout?.on('data', (data) => {
+                const progressMatch = data.toString().match(/(\d+)%/);
+                if (progressMatch) {
+                    const percentage = parseInt(progressMatch[1]);
+                    const currentMB = (fileStats.size * percentage / 100) / (1024 * 1024);
+                    progressBar.update(currentMB);
+                }
+            });
+            
+            const { stdout, stderr } = await new Promise((resolve, reject) => {
+                uploadProcess.on('close', (code) => {
+                    if (code === 0) {
+                        resolve({ stdout: '', stderr: '' });
+                    } else {
+                        reject(new Error(`Curl exited with code ${code}`));
+                    }
+                });
+            });
             
             const uploadTime = ((Date.now() - startTime) / 1000).toFixed(1);
             console.log(`  - ✅ Upload successful! Upload time: ${uploadTime}s`);

@@ -121,10 +121,40 @@ async function downloadFileLocally(url, movieTitle, page) {
         });
 
         const writer = fs.createWriteStream(filePath);
+        const totalSize = parseInt(response.headers['content-length'] || '0');
+        let downloadedSize = 0;
+        const startTime = Date.now();
+
+        // Create progress bar
+        const progressBar = new cliProgress.SingleBar({
+            format: '  - 📥 Downloading |{bar}| {percentage}% | {value}/{total} MB | ETA: {eta}s | Speed: {speed} MB/s',
+            barCompleteChar: '█',
+            barIncompleteChar: '░',
+            hideCursor: true,
+            clearOnComplete: true
+        });
+
+        if (totalSize > 0) {
+            progressBar.start(totalSize / (1024 * 1024), 0);
+        }
+
+        // Track download progress
+        response.data.on('data', (chunk) => {
+            downloadedSize += chunk.length;
+            if (totalSize > 0) {
+                progressBar.update(downloadedSize / (1024 * 1024));
+            }
+        });
+
         response.data.pipe(writer);
 
         await new Promise((resolve, reject) => {
-            writer.on('finish', resolve);
+            writer.on('finish', () => {
+                if (totalSize > 0) {
+                    progressBar.stop();
+                }
+                resolve();
+            });
             writer.on('error', reject);
         });
 
