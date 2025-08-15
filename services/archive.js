@@ -256,7 +256,7 @@ export async function uploadFileToArchive(filePath, fileName, maxRetries = 3) {
             // Build curl command following Internet Archive documentation
             // Use simpler description to avoid Windows command parsing issues
             const simpleDescription = `Movie: ${metadata.title} | Source: VegaXPixelDrain Automation | Uploader: ${USERNAME}`;
-            const curlCommand = `curl --location --progress-bar --header "x-amz-auto-make-bucket:1" --header "x-archive-meta-mediatype:movies" --header "x-archive-meta-title:${metadata.title}" --header "x-archive-meta-description:${simpleDescription}" --header "authorization: LOW ${ACCESS_KEY}:${SECRET_KEY}" --upload-file "${filePath}" "https://s3.us.archive.org/${collection}/${encodeURIComponent(fileName)}"`;
+            const curlCommand = `curl --location --header "x-amz-auto-make-bucket:1" --header "x-archive-meta-mediatype:movies" --header "x-archive-meta-title:${metadata.title}" --header "x-archive-meta-description:${simpleDescription}" --header "authorization: LOW ${ACCESS_KEY}:${SECRET_KEY}" --upload-file "${filePath}" "https://s3.us.archive.org/${collection}/${encodeURIComponent(fileName)}"`;
             
             const startTime = Date.now();
             
@@ -271,35 +271,62 @@ export async function uploadFileToArchive(filePath, fileName, maxRetries = 3) {
             
             progressBar.start(fileStats.size / (1024 * 1024), 0);
             
-            // Execute curl command with progress tracking
-            const { exec } = await import('child_process');
-            const { promisify } = await import('util');
-            const execAsync = promisify(exec);
+            // Execute curl and capture progress
+            const { spawn } = await import('child_process');
             
-            // Track upload progress using curl's progress output
-            const uploadProcess = exec(curlCommand, (error, stdout, stderr) => {
-                progressBar.stop();
-            });
+            const curlProcess = spawn('curl', [
+                '--location',
+                '--progress-bar',
+                '--write-out', '\n%{size_upload} %{speed_upload}',
+                '--header', 'x-amz-auto-make-bucket:1',
+                '--header', 'x-archive-meta-mediatype:movies',
+                '--header', `x-archive-meta-title:${metadata.title}`,
+                '--header', `x-archive-meta-description:${simpleDescription}`,
+                '--header', `authorization: LOW ${ACCESS_KEY}:${SECRET_KEY}`,
+                '--upload-file', filePath,
+                `https://s3.us.archive.org/${collection}/${encodeURIComponent(fileName)}`
+            ]);
             
-            // Monitor curl progress output
-            uploadProcess.stdout?.on('data', (data) => {
-                const progressMatch = data.toString().match(/(\d+)%/);
+            let lastProgress = 0;
+            
+            curlProcess.stderr.on('data', (data) => {
+                const output = data.toString();
+                // Parse curl progress output (format: % 1234567 1234567 1234567 1234567)
+                const progressMatch = output.match(/(\d+)\s+(\d+)\s+(\d+)\s+(\d+)/);
                 if (progressMatch) {
-                    const percentage = parseInt(progressMatch[1]);
-                    const currentMB = (fileStats.size * percentage / 100) / (1024 * 1024);
-                    progressBar.update(currentMB);
+                    const uploaded = parseInt(progressMatch[1]);
+                    const total = parseInt(progressMatch[2]);
+                    if (total > 0) {
+                        const percentage = (uploaded / total) * 100;
+                        const currentMB = uploaded / (1024 * 1024);
+                        progressBar.update(currentMB);
+                        lastProgress = percentage;
+                    }
                 }
             });
             
             const { stdout, stderr } = await new Promise((resolve, reject) => {
-                uploadProcess.on('close', (code) => {
+                let stdoutData = '';
+                let stderrData = '';
+                
+                curlProcess.stdout.on('data', (data) => {
+                    stdoutData += data.toString();
+                });
+                
+                curlProcess.stderr.on('data', (data) => {
+                    stderrData += data.toString();
+                });
+                
+                curlProcess.on('close', (code) => {
                     if (code === 0) {
-                        resolve({ stdout: '', stderr: '' });
+                        resolve({ stdout: stdoutData, stderr: stderrData });
                     } else {
                         reject(new Error(`Curl exited with code ${code}`));
                     }
                 });
             });
+            
+            progressBar.stop();
             
             const uploadTime = ((Date.now() - startTime) / 1000).toFixed(1);
             console.log(`  - ✅ Upload successful! Upload time: ${uploadTime}s`);
