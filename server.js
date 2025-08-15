@@ -8,7 +8,7 @@ import { fileURLToPath } from 'url';
 import cors from 'cors';
 
 import { scrapeVegaMovies } from "./services/vegamovies.js";
-import { getUploadedFiles, splitMoviesByUploadStatus } from "./services/pixeldrain.js";
+import { getUploadedFiles, splitMoviesByUploadStatus } from "./services/uploadManager.js";
 import { getDownloadLinks } from "./services/linkFetcher.js";
 
 // Helper for getting __dirname in ES Modules
@@ -207,32 +207,71 @@ app.get("/api/v1/process-all", async (req, res) => {
 });
 
 // Health check endpoint
-app.get("/health", (req, res) => {
-    res.json({ 
-        status: "healthy", 
-        timestamp: new Date().toISOString(),
-        version: "1.0.0",
-        environment: NODE_ENV,
-        port: PORT
-    });
+app.get("/health", async (req, res) => {
+    try {
+        const { healthCheck, getServiceInfo } = await import('./services/uploadManager.js');
+        const uploadHealth = await healthCheck();
+        const serviceInfo = getServiceInfo();
+        
+        res.json({ 
+            status: "healthy", 
+            timestamp: new Date().toISOString(),
+            version: "1.0.0",
+            environment: NODE_ENV,
+            port: PORT,
+            upload_service: serviceInfo,
+            upload_health: uploadHealth
+        });
+    } catch (error) {
+        res.json({ 
+            status: "healthy", 
+            timestamp: new Date().toISOString(),
+            version: "1.0.0",
+            environment: NODE_ENV,
+            port: PORT,
+            upload_service: { error: error.message }
+        });
+    }
 });
 
 // API documentation endpoint
-app.get("/api/v1/docs", (req, res) => {
-    res.json({
-        title: "VegaXPixelDrain API",
-        version: "1.0.0",
-        description: "Automated movie scraping and upload service",
-        endpoints: {
-            "GET /health": "Health check",
-            "GET /api/v1/movies": "Scrape movies and match with PixelDrain",
-            "GET /api/v1/fetch-links": "Process missing movies and upload to PixelDrain",
-            "GET /api/v1/process-all": "Complete automation pipeline",
-            "GET /api/v1/docs": "This documentation"
-        },
-        environment: NODE_ENV,
-        timestamp: new Date().toISOString()
-    });
+app.get("/api/v1/docs", async (req, res) => {
+    try {
+        const { getServiceInfo } = await import('./services/uploadManager.js');
+        const serviceInfo = getServiceInfo();
+        
+        res.json({
+            title: "VegaXPixelDrain API",
+            version: "1.0.0",
+            description: "Automated movie scraping and upload service",
+            upload_service: serviceInfo,
+            endpoints: {
+                "GET /health": "Health check with upload service status",
+                "GET /api/v1/movies": `Scrape movies and match with ${serviceInfo.name}`,
+                "GET /api/v1/fetch-links": `Process missing movies and upload to ${serviceInfo.name}`,
+                "GET /api/v1/process-all": "Complete automation pipeline",
+                "GET /api/v1/docs": "This documentation"
+            },
+            environment: NODE_ENV,
+            timestamp: new Date().toISOString()
+        });
+    } catch (error) {
+        res.json({
+            title: "VegaXPixelDrain API",
+            version: "1.0.0",
+            description: "Automated movie scraping and upload service",
+            upload_service: { error: error.message },
+            endpoints: {
+                "GET /health": "Health check",
+                "GET /api/v1/movies": "Scrape movies and match with upload service",
+                "GET /api/v1/fetch-links": "Process missing movies and upload",
+                "GET /api/v1/process-all": "Complete automation pipeline",
+                "GET /api/v1/docs": "This documentation"
+            },
+            environment: NODE_ENV,
+            timestamp: new Date().toISOString()
+        });
+    }
 });
 
 // 404 handler

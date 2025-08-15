@@ -1,5 +1,5 @@
 import { setupBrowser, closeBrowser } from './vegamovies.js';
-import { uploadFileToPixelDrain } from './pixeldrain.js';
+import { uploadFile } from './uploadManager.js';
 import { optimizeSystemForUploads, getSystemStats } from './systemOptimizer.js';
 import fs from 'fs';
 import path from 'path';
@@ -214,9 +214,9 @@ async function attemptDownloadWithRetries(context, page, buttonElement, buttonTy
             if (result.success && result.finalUrl) {
                 const downloadResult = await downloadFileLocally(result.finalUrl, movie.title, newPage);
                 if (downloadResult.success) {
-                    const uploadResult = await uploadFileToPixelDrain(downloadResult.filePath, downloadResult.fileName);
+                    const uploadResult = await uploadFile(downloadResult.filePath, downloadResult.fileName);
                     if (uploadResult.success) {
-                        return { success: true, url: result.finalUrl, pixeldrainId: uploadResult.id, pixeldrainUrl: uploadResult.url };
+                        return { success: true, url: result.finalUrl, uploadId: uploadResult.id, uploadUrl: uploadResult.url };
                     } else {
                         throw new Error(`Upload failed: ${uploadResult.error}`);
                     }
@@ -270,11 +270,11 @@ async function processSingleMovie(context, movie) {
 
         if (result.success) {
             movieResult.downloadLink = result.url;
-            movieResult.pixeldrainId = result.pixeldrainId;
-            movieResult.pixeldrainUrl = result.pixeldrainUrl;
+            movieResult.uploadId = result.uploadId;
+            movieResult.uploadUrl = result.uploadUrl;
             movieResult.status = 'success';
-            console.log(`  - ✅ Successfully downloaded and uploaded to PixelDrain!`);
-            console.log(`  - 🔗 PixelDrain URL: ${result.pixeldrainUrl}`);
+            console.log(`  - ✅ Successfully downloaded and uploaded!`);
+            console.log(`  - 🔗 Upload URL: ${result.uploadUrl}`);
         } else {
             movieResult.status = 'failed_after_retries';
             movieResult.error = result.error;

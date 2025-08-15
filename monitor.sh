@@ -13,6 +13,11 @@ if curl -s http://localhost:3002/health > /dev/null; then
     echo "   ✅ API Service: RUNNING"
     HEALTH=$(curl -s http://localhost:3002/health | jq -r '.status' 2>/dev/null || echo "healthy")
     echo "   🔍 Health: $HEALTH"
+    
+    # Show upload service info
+    UPLOAD_SERVICE=$(curl -s http://localhost:3002/health | jq -r '.upload_service.name' 2>/dev/null || echo "Unknown")
+    UPLOAD_STATUS=$(curl -s http://localhost:3002/health | jq -r '.upload_health.status' 2>/dev/null || echo "Unknown")
+    echo "   📤 Upload Service: $UPLOAD_SERVICE ($UPLOAD_STATUS)"
 else
     echo "   ❌ API Service: NOT RUNNING"
 fi
