@@ -63,6 +63,11 @@ export function splitMoviesByUploadStatus(scrapedList, uploadedFiles) {
     const uploaded = [];
     const missing = [];
 
+    // If no uploaded files, all scraped items are missing
+    if (uploadedNames.length === 0) {
+        return { uploaded: [], missing: scrapedList };
+    }
+
     scrapedList.forEach(item => {
         const normTitle = normalizeName(item.title);
 
