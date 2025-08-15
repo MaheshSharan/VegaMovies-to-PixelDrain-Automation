@@ -232,7 +232,7 @@ export function splitMoviesByUploadStatus(scrapedList, uploadedFiles) {
     return { uploaded, missing };
 }
 
-// Upload file to Internet Archive
+// Upload file to Internet Archive using curl (more reliable than AWS SDK)
 export async function uploadFileToArchive(filePath, fileName, maxRetries = 3) {
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
         try {
@@ -252,22 +252,19 @@ export async function uploadFileToArchive(filePath, fileName, maxRetries = 3) {
             // Generate metadata
             const metadata = generateArchiveMetadata(fileName, contentType);
             
-            // Create file stream
-            const fileStream = fs.createReadStream(filePath);
+            // Build curl command following Internet Archive documentation
+            // Use simpler description to avoid Windows command parsing issues
+            const simpleDescription = `Movie: ${metadata.title} | Source: VegaXPixelDrain Automation | Uploader: ${USERNAME}`;
+            const curlCommand = `curl --location --header "x-amz-auto-make-bucket:1" --header "x-archive-meta-mediatype:movies" --header "x-archive-meta-title:${metadata.title}" --header "x-archive-meta-description:${simpleDescription}" --header "authorization: LOW ${ACCESS_KEY}:${SECRET_KEY}" --upload-file "${filePath}" "https://s3.us.archive.org/${collection}/${encodeURIComponent(fileName)}"`;
             
-            // Use simple PUT command without complex metadata for now
-            const uploadCommand = new PutObjectCommand({
-                Bucket: collection,
-                Key: fileName,
-                Body: fileStream,
-                ContentType: 'application/octet-stream'
-            });
-            
-            let lastProgress = 0;
             const startTime = Date.now();
             
-            // Upload with progress tracking
-            const response = await s3Client.send(uploadCommand);
+            // Execute curl command
+            const { exec } = await import('child_process');
+            const { promisify } = await import('util');
+            const execAsync = promisify(exec);
+            
+            const { stdout, stderr } = await execAsync(curlCommand);
             
             const uploadTime = ((Date.now() - startTime) / 1000).toFixed(1);
             console.log(`  - ✅ Upload successful! Upload time: ${uploadTime}s`);
@@ -295,8 +292,16 @@ export async function uploadFileToArchive(filePath, fileName, maxRetries = 3) {
         } catch (error) {
             console.error(`  - ❌ Upload attempt ${attempt} failed: ${error.message}`);
             
+            if (error.stdout) {
+                console.log(`  - Stdout: ${error.stdout}`);
+            }
+            
+            if (error.stderr) {
+                console.log(`  - Stderr: ${error.stderr}`);
+            }
+            
             // Check if it's a retryable error
-            if (error.name === 'NetworkError' || error.code === 'ECONNRESET' || error.code === 'ETIMEDOUT') {
+            if (error.message.includes('Network') || error.message.includes('timeout') || error.message.includes('connection')) {
                 console.log(`  - 🔄 Network error detected, waiting before retry...`);
                 if (attempt < maxRetries) {
                     const waitTime = attempt * 10000; // 10s, 20s, 30s
