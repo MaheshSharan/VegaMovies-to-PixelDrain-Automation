@@ -34,6 +34,17 @@ const s3Client = new S3Client({
     }
 });
 
+// Custom request handler to add Internet Archive specific headers
+const originalRequestHandler = s3Client.config.requestHandler;
+s3Client.config.requestHandler = {
+    ...originalRequestHandler,
+    httpOptions: {
+        ...originalRequestHandler?.httpOptions,
+        timeout: 300000,
+        connectTimeout: 60000
+    }
+};
+
 // Detect content type (movie vs TV show)
 function detectContentType(title) {
     const tvShowPatterns = [
@@ -99,15 +110,12 @@ function generateArchiveMetadata(title, contentType) {
     const metadata = extractMetadata(title);
     const uploadDate = new Date().toISOString().split('T')[0];
     
+    // Create a single-line description without newlines or special characters
+    const description = `Movie: ${metadata.cleanTitle}${metadata.year ? ` (${metadata.year})` : ''} | Quality: ${metadata.quality || 'Unknown'} | Language: ${metadata.language || 'Unknown'} | Format: ${metadata.format || 'Unknown'} | Source: VegaXPixelDrain Automation | Upload Date: ${uploadDate} | Uploader: ${USERNAME}`;
+    
     const archiveMetadata = {
         title: metadata.cleanTitle,
-        description: `Movie: ${metadata.cleanTitle}${metadata.year ? ` (${metadata.year})` : ''}
-Quality: ${metadata.quality || 'Unknown'}
-Language: ${metadata.language || 'Unknown'}
-Format: ${metadata.format || 'Unknown'}
-Source: VegaXPixelDrain Automation
-Upload Date: ${uploadDate}
-Uploader: ${USERNAME}`,
+        description: description,
         subject: [
             'vegaxpixeldrain',
             'automated-upload',
@@ -115,7 +123,7 @@ Uploader: ${USERNAME}`,
             metadata.quality,
             metadata.language,
             metadata.format
-        ].filter(Boolean),
+        ].filter(Boolean).join(','),
         creator: USERNAME,
         date: uploadDate,
         collection: contentType === 'tvshow' ? TVSHOWS_COLLECTION : MOVIES_COLLECTION,
@@ -264,12 +272,11 @@ export async function uploadFileToArchive(filePath, fileName, maxRetries = 3) {
             // Create file stream
             const fileStream = fs.createReadStream(filePath);
             
-            // Prepare upload command
+            // Use simple PUT command without complex metadata for now
             const uploadCommand = new PutObjectCommand({
                 Bucket: collection,
                 Key: fileName,
                 Body: fileStream,
-                Metadata: metadata,
                 ContentType: 'application/octet-stream'
             });
             
