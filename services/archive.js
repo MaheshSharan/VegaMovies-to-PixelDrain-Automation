@@ -284,7 +284,7 @@ export async function uploadFileToArchive(filePath, fileName, maxRetries = 3) {
                 '--header', `x-archive-meta-description:${simpleDescription}`,
                 '--header', `authorization: LOW ${ACCESS_KEY}:${SECRET_KEY}`,
                 '--upload-file', filePath,
-                `https://s3.us.archive.org/${collection}/${encodeURIComponent(fileName)}`
+                `https://s3.us.archive.org/${collection}/${fileName}`
             ]);
             
             let lastProgress = 0;
@@ -332,7 +332,7 @@ export async function uploadFileToArchive(filePath, fileName, maxRetries = 3) {
             console.log(`  - ✅ Upload successful! Upload time: ${uploadTime}s`);
             
             // Generate archive.org URL
-            const archiveUrl = `https://archive.org/details/${collection}/${encodeURIComponent(fileName)}`;
+            const archiveUrl = `https://archive.org/details/${collection}/${fileName}`;
             console.log(`  - 🔗 Archive.org URL: ${archiveUrl}`);
             
             // Clean up local file after successful upload
