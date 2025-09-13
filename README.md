@@ -1,6 +1,6 @@
 # VegaXPixelDrain
 
-> **Enterprise-grade automated movie processing and distribution system**
+> **This is my Dumpped Automation Project I experimented for getting new movies and tvshows for my AssSite(Not Active Anymore), Feel Free to experiment**
 
 VegaXPixelDrain is a production-ready, scalable API service that automatically scrapes movies from multiple sources, processes download links with advanced bypass techniques, and uploads them to cloud storage with comprehensive monitoring and automation.
 
